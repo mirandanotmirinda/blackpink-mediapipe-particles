@@ -1,0 +1,977 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blackpink Gesture 3D Particle Showcase</title>
+    
+    <!-- Tailwind CSS for UI layout -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <!-- Three.js CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <!-- MediaPipe Hands CDN dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none;
+        }
+
+        body, html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #050508;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            color: #fff;
+        }
+
+        /* Container for video feed and 3D overlays */
+        #main-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+        }
+
+        /* Video element - preserves original video aspect ratio with object-fit contain/cover */
+        #webcam {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1); /* Mirror camera */
+            z-index: 1;
+            opacity: 0.85;
+            filter: brightness(0.7) contrast(1.1);
+        }
+
+        /* MediaPipe skeleton overlay canvas */
+        #skeleton-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transform: scaleX(-1);
+            z-index: 2;
+            pointer-events: none;
+        }
+
+        /* Three.js Render Canvas */
+        #three-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 3;
+            pointer-events: none;
+        }
+
+        /* UI Overlays */
+        .glass-panel {
+            background: rgba(18, 18, 28, 0.65);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 105, 180, 0.25);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+        }
+
+        /* Light background theme adaptations */
+        body.theme-white {
+            background-color: #ffffff !important;
+            color: #111827 !important;
+        }
+        body.theme-white #webcam {
+            display: none !important;
+        }
+
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 5px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.2);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(236, 72, 153, 0.5);
+            border-radius: 4px;
+        }
+
+        .pink-glow-text {
+            text-shadow: 0 0 12px rgba(244, 114, 182, 0.8);
+        }
+
+        .pink-glow-box {
+            box-shadow: 0 0 15px rgba(236, 72, 153, 0.3);
+        }
+
+        /* Animated pulse ring for current gesture */
+        .active-gesture-card {
+            border-color: rgba(244, 114, 182, 1) !important;
+            background: rgba(236, 72, 153, 0.25) !important;
+            box-shadow: 0 0 20px rgba(236, 72, 153, 0.5);
+        }
+
+        /* Smooth UI panel transition for collapsible sidebar */
+        .panel-transition {
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
+        }
+
+        .panel-hidden-left {
+            transform: translateX(-110%);
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .panel-hidden-right {
+            transform: translateX(110%);
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        /* Loader spinner */
+        .spinner {
+            border: 3px solid rgba(255,255,255,0.1);
+            border-radius: 50%;
+            border-top: 3px solid #ec4899;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="main-container">
+        <!-- Live Webcam Video -->
+        <video id="webcam" autoplay playsinline muted></video>
+
+        <!-- MediaPipe Hand Tracking Canvas Overlay -->
+        <canvas id="skeleton-canvas"></canvas>
+
+        <!-- Three.js 3D Particles Canvas Overlay -->
+        <canvas id="three-canvas"></canvas>
+
+        <!-- Top Header & Current Detected Gesture Display -->
+        <div class="absolute top-4 left-1/2 transform -translate-x-1/2 z-20 flex flex-col items-center pointer-events-none">
+            <div class="glass-panel px-6 py-2.5 rounded-full flex items-center gap-3 border border-pink-500/40">
+                <div id="status-indicator" class="w-3 h-3 rounded-full bg-yellow-400 animate-ping"></div>
+                <span id="status-text" class="text-xs tracking-wider uppercase font-medium text-pink-200">Initializing Camera & AI Model...</span>
+            </div>
+
+            <!-- Large Banner Showing Triggered Gesture Pattern Name -->
+            <div id="active-banner" class="mt-3 px-8 py-2 rounded-2xl glass-panel text-center transition-all duration-300 opacity-0 scale-90">
+                <div class="text-xs text-pink-300 font-semibold tracking-widest uppercase">Detected Gesture Pattern</div>
+                <div id="active-pattern-title" class="text-2xl font-black text-white pink-glow-text mt-0.5">Random Nebula</div>
+            </div>
+        </div>
+
+        <!-- Floating UI Toggle Buttons -->
+        <button id="toggle-left-btn" onclick="toggleLeftPanel()" class="absolute top-4 left-4 z-30 p-2.5 glass-panel hover:bg-pink-600/30 border border-pink-500/40 rounded-xl text-pink-300 hover:text-white transition-all duration-200 flex items-center gap-1.5 text-xs font-semibold">
+            <i data-lucide="layout-sidebar-left" class="w-4 h-4"></i>
+            <span id="left-btn-text">Hide Gesture List</span>
+        </button>
+
+        <button id="toggle-right-btn" onclick="toggleRightPanel()" class="absolute top-4 right-4 z-30 p-2.5 glass-panel hover:bg-pink-600/30 border border-pink-500/40 rounded-xl text-pink-300 hover:text-white transition-all duration-200 flex items-center gap-1.5 text-xs font-semibold">
+            <i data-lucide="sliders" class="w-4 h-4"></i>
+            <span id="right-btn-text">Hide Console</span>
+        </button>
+
+        <!-- Left Controls: Gestures Reference & Per-Gesture Photo Uploaders -->
+        <div id="left-panel" class="panel-transition absolute top-16 left-4 z-20 w-80 max-h-[calc(100vh-5rem)] flex flex-col glass-panel rounded-2xl p-4 overflow-hidden border border-pink-500/30">
+            <div class="flex items-center justify-between pb-3 border-b border-white/10 mb-3">
+                <div class="flex items-center gap-2">
+                    <i data-lucide="hand" class="w-5 h-5 text-pink-400"></i>
+                    <h2 class="font-bold text-sm tracking-wide text-white">7 Gestures & Custom Photos</h2>
+                </div>
+                <span class="text-[10px] bg-pink-500/20 text-pink-300 px-2 py-0.5 rounded-full border border-pink-500/30">Matting Particle Extraction</span>
+            </div>
+
+            <p class="text-[11px] text-gray-300 mb-3 leading-relaxed">
+                Upload custom photos for each gesture! Particles morph smoothly into crisp stationary outlines upon detection.
+            </p>
+
+            <!-- Gesture Upload Cards Container -->
+            <div id="gesture-list" class="flex-1 overflow-y-auto space-y-2.5 pr-1">
+                <!-- Cards dynamically rendered here -->
+            </div>
+        </div>
+
+        <!-- Right Side Settings & Stats -->
+        <div id="right-panel" class="panel-transition absolute top-16 right-4 z-20 w-72 glass-panel rounded-2xl p-4 border border-pink-500/30 flex flex-col gap-3">
+            <div class="flex items-center justify-between pb-2 border-b border-white/10">
+                <div class="flex items-center gap-2">
+                    <i data-lucide="sliders" class="w-4 h-4 text-pink-400"></i>
+                    <h3 class="font-bold text-xs text-white">3D Particle Console</h3>
+                </div>
+            </div>
+
+            <!-- Particle Count Selector -->
+            <div>
+                <div class="flex justify-between text-xs text-gray-300 mb-1">
+                    <span>Particle Count (3000-5000)</span>
+                    <span id="particle-count-label" class="text-pink-400 font-mono">4500</span>
+                </div>
+                <input id="particle-count-slider" type="range" min="3000" max="5000" step="250" value="4500" 
+                    class="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-pink-500">
+            </div>
+
+            <!-- Particle Clustering / Density Control -->
+            <div>
+                <div class="flex justify-between text-xs text-gray-300 mb-1">
+                    <span>Cluster Density / Spread</span>
+                    <span id="cluster-density-label" class="text-pink-400 font-mono">1.0x</span>
+                </div>
+                <input id="cluster-density-slider" type="range" min="0.5" max="2.0" step="0.1" value="1.0" 
+                    class="w-full h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-pink-500">
+            </div>
+
+            <!-- Background Mode Selector -->
+            <div>
+                <label class="text-xs text-gray-300 mb-1 block">Background Mode</label>
+                <select id="bg-mode-select" onchange="handleBgModeChange(this.value)" class="w-full bg-gray-900 border border-pink-500/40 rounded-lg text-xs text-pink-200 p-2 focus:outline-none focus:border-pink-400">
+                    <option value="webcam">Live Webcam Feed</option>
+                    <option value="black">Solid Black</option>
+                    <option value="white">Solid White</option>
+                    <option value="transparent">None (Transparent Video)</option>
+                    <option value="custom">Custom Color</option>
+                </select>
+                <!-- Color Picker for Custom BG -->
+                <div id="custom-color-container" class="mt-2 hidden flex items-center justify-between text-xs text-gray-300">
+                    <span>Choose Color:</span>
+                    <input id="custom-bg-color" type="color" value="#050508" onchange="handleCustomBgColor(this.value)" class="w-8 h-8 rounded border border-pink-500 cursor-pointer bg-transparent">
+                </div>
+            </div>
+
+            <!-- Display Hand Skeleton Toggle -->
+            <div class="flex items-center justify-between">
+                <span class="text-xs text-gray-300">Show Hand Skeleton Track</span>
+                <label class="relative inline-flex items-center cursor-pointer">
+                    <input id="toggle-skeleton" type="checkbox" checked class="sr-only peer">
+                    <div class="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-pink-600"></div>
+                </label>
+            </div>
+
+            <hr class="border-white/10 my-1">
+
+            <!-- Information Footer -->
+            <div class="text-[10px] text-gray-400 space-y-1">
+                <div class="flex justify-between">
+                    <span>Camera Status:</span>
+                    <span id="cam-status" class="text-emerald-400">Active</span>
+                </div>
+                <div class="flex justify-between">
+                    <span>Sampling Mode:</span>
+                    <span id="mode-status" class="text-pink-300">Even Spread</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Hidden canvas used for processing uploaded photos into dense coordinates -->
+        <canvas id="sampler-canvas" width="400" height="400" class="hidden"></canvas>
+    </div>
+
+    <!-- MAIN JAVASCRIPT LOGIC -->
+    <script>
+        // --- 1. Global Definitions & Gesture Target Configurations ---
+        const GESTURES = [
+            { id: 'palm', name: 'Open Palm', title: 'Blackpink Album Cover', desc: 'BLACKPINK Album / Title Contour', defaultText: 'BLACK\nPINK' },
+            { id: 'fist', name: 'Closed Fist', title: 'Crown Outline', desc: 'Classic Crown Contour Particles', defaultType: 'CROWN' },
+            { id: 'heart', name: 'Heart Sign', title: '4 Members Back View', desc: 'BLACKPINK 4 Members Silhouette', defaultType: 'BACKVIEW' },
+            { id: 'one', name: 'Gesture "1"', title: 'Jennie Signature', desc: 'Jennie Artistic Signature', defaultType: 'JENNIE_SIGN' },
+            { id: 'two', name: 'Gesture "2"', title: 'Lisa Signature', desc: 'Lisa Artistic Signature', defaultType: 'LISA_SIGN' },
+            { id: 'three', name: 'Gesture "3"', title: 'Rosé Signature', desc: 'Rosé Artistic Signature', defaultType: 'ROSE_SIGN' },
+            { id: 'four', name: 'Gesture "4"', title: 'Jisoo Signature', desc: 'Jisoo Artistic Signature', defaultType: 'JISOO_SIGN' }
+        ];
+
+        // Store source images or procedural keys for dynamic re-sampling on particle count change
+        const rawGestureSources = {};
+        // Store active particle coordinates per gesture
+        const customGestureCoordinates = {};
+
+        // Helper function: Generate random 3D nebula points for initial state
+        function createRandomNebulaPoints(count) {
+            const positions = new Float32Array(count * 3);
+            for (let i = 0; i < count; i++) {
+                const u = Math.random();
+                const v = Math.random();
+                const theta = u * 2.0 * Math.PI;
+                const phi = Math.acos(2.0 * v - 1.0);
+                const r = Math.cbrt(Math.random()) * 18;
+
+                positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+                positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+                positions[i * 3 + 2] = r * Math.cos(phi) * 0.5;
+            }
+            return positions;
+        }
+
+        // DOM Elements
+        const videoElement = document.getElementById('webcam');
+        const skeletonCanvas = document.getElementById('skeleton-canvas');
+        const skeletonCtx = skeletonCanvas.getContext('2d');
+        const samplerCanvas = document.getElementById('sampler-canvas');
+        const samplerCtx = samplerCanvas.getContext('2d');
+        const statusIndicator = document.getElementById('status-indicator');
+        const statusText = document.getElementById('status-text');
+        const activeBanner = document.getElementById('active-banner');
+        const activePatternTitle = document.getElementById('active-pattern-title');
+        const gestureListContainer = document.getElementById('gesture-list');
+
+        let showSkeleton = true;
+        let PARTICLE_COUNT = 4500;
+        let clusterScale = 1.0;
+        let activeGestureId = null;
+
+        // UI Panel Visibility States
+        let leftPanelVisible = true;
+        let rightPanelVisible = true;
+
+        // Initialize Lucide Icons
+        lucide.createIcons();
+
+        // UI Toggle Panel Functions
+        window.toggleLeftPanel = function() {
+            leftPanelVisible = !leftPanelVisible;
+            const panel = document.getElementById('left-panel');
+            const btnText = document.getElementById('left-btn-text');
+            if (leftPanelVisible) {
+                panel.classList.remove('panel-hidden-left');
+                btnText.innerText = "Hide Gesture List";
+            } else {
+                panel.classList.add('panel-hidden-left');
+                btnText.innerText = "Show Gesture List";
+            }
+        };
+
+        window.toggleRightPanel = function() {
+            rightPanelVisible = !rightPanelVisible;
+            const panel = document.getElementById('right-panel');
+            const btnText = document.getElementById('right-btn-text');
+            if (rightPanelVisible) {
+                panel.classList.remove('panel-hidden-right');
+                btnText.innerText = "Hide Console";
+            } else {
+                panel.classList.add('panel-hidden-right');
+                btnText.innerText = "Show Console";
+            }
+        };
+
+        // Handle Background Mode Changes
+        window.handleBgModeChange = function(mode) {
+            const container = document.getElementById('main-container');
+            const customColorBox = document.getElementById('custom-color-container');
+            document.body.classList.remove('theme-white');
+            customColorBox.classList.add('hidden');
+
+            if (mode === 'webcam') {
+                videoElement.style.display = 'block';
+                videoElement.style.opacity = '0.85';
+                container.style.backgroundColor = '#000';
+            } else if (mode === 'black') {
+                videoElement.style.display = 'none';
+                container.style.backgroundColor = '#000000';
+            } else if (mode === 'white') {
+                videoElement.style.display = 'none';
+                document.body.classList.add('theme-white');
+                container.style.backgroundColor = '#ffffff';
+            } else if (mode === 'transparent') {
+                videoElement.style.display = 'block';
+                videoElement.style.opacity = '0.2';
+                container.style.backgroundColor = 'transparent';
+            } else if (mode === 'custom') {
+                videoElement.style.display = 'none';
+                customColorBox.classList.remove('hidden');
+                const val = document.getElementById('custom-bg-color').value;
+                container.style.backgroundColor = val;
+            }
+        };
+
+        window.handleCustomBgColor = function(color) {
+            document.getElementById('main-container').style.backgroundColor = color;
+        };
+
+        // --- 2. Build UI Gesture Upload List ---
+        function initUI() {
+            GESTURES.forEach((g) => {
+                const card = document.createElement('div');
+                card.id = `gesture-card-${g.id}`;
+                card.className = "glass-panel rounded-xl p-2.5 border border-white/10 transition-all duration-200 hover:border-pink-500/50";
+                card.innerHTML = `
+                    <div class="flex items-center justify-between mb-1.5">
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs font-bold text-pink-300 px-2 py-0.5 bg-pink-950/60 rounded-md border border-pink-500/30">${g.name}</span>
+                            <span class="text-xs font-semibold text-white truncate max-w-[120px]">${g.title}</span>
+                        </div>
+                        <span id="badge-${g.id}" class="text-[9px] text-gray-400 bg-gray-800 px-1.5 py-0.5 rounded">Preset Pattern</span>
+                    </div>
+                    <div class="text-[10px] text-gray-400 mb-2 truncate">${g.desc}</div>
+                    <div class="flex items-center gap-2">
+                        <label class="flex-1 flex items-center justify-center gap-1.5 py-1 px-2 bg-pink-600/20 hover:bg-pink-600/40 border border-pink-500/30 rounded-lg cursor-pointer text-[11px] text-pink-200 transition-all">
+                            <i data-lucide="upload" class="w-3 h-3"></i>
+                            <span>Upload Image</span>
+                            <input type="file" accept="image/*" class="hidden" onchange="handleImageUpload(event, '${g.id}')">
+                        </label>
+                        <button onclick="resetGestureImage('${g.id}')" title="Reset to default" class="p-1 text-gray-400 hover:text-white hover:bg-gray-700/50 rounded-lg transition-colors">
+                            <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i>
+                        </button>
+                    </div>
+                `;
+                gestureListContainer.appendChild(card);
+            });
+            lucide.createIcons();
+        }
+
+        // --- 3. Matting & Even-Distribution Particle Extraction ---
+        function generateCoordinatesFromImage(img, pointCount) {
+            const w = 400;
+            const h = 400;
+            samplerCanvas.width = w;
+            samplerCanvas.height = h;
+            samplerCtx.clearRect(0, 0, w, h);
+
+            const scale = Math.min((w - 20) / img.width, (h - 20) / img.height);
+            const nw = img.width * scale;
+            const nh = img.height * scale;
+            const nx = (w - nw) / 2;
+            const ny = (h - nh) / 2;
+            samplerCtx.drawImage(img, nx, ny, nw, nh);
+
+            const imgData = samplerCtx.getImageData(0, 0, w, h);
+            const pixels = imgData.data;
+            const validPoints = [];
+
+            const step = 2;
+            for (let y = 1; y < h - 1; y += step) {
+                for (let x = 1; x < w - 1; x += step) {
+                    const idx = (y * w + x) * 4;
+                    const r = pixels[idx];
+                    const g = pixels[idx + 1];
+                    const b = pixels[idx + 2];
+                    const alpha = pixels[idx + 3];
+
+                    const brightness = (r * 0.299 + g * 0.587 + b * 0.114);
+
+                    const rightIdx = (y * w + (x + 1)) * 4;
+                    const bRight = (pixels[rightIdx] * 0.299 + pixels[rightIdx+1] * 0.587 + pixels[rightIdx+2] * 0.114);
+                    const edgeDiff = Math.abs(brightness - bRight);
+
+                    if ((alpha > 50 && brightness > 30) || edgeDiff > 20) {
+                        const posX = ((x / w) - 0.5) * 28;
+                        const posY = -((y / h) - 0.5) * 28;
+                        const posZ = (Math.random() - 0.5) * 0.4;
+                        validPoints.push({ x: posX, y: posY, z: posZ });
+                    }
+                }
+            }
+
+            const result = new Float32Array(pointCount * 3);
+            const totalFound = validPoints.length;
+
+            if (totalFound === 0) {
+                return createRandomNebulaPoints(pointCount);
+            }
+
+            const stride = totalFound / pointCount;
+
+            for (let i = 0; i < pointCount; i++) {
+                let p;
+                if (stride >= 1) {
+                    const srcIdx = Math.floor(i * stride) % totalFound;
+                    p = validPoints[srcIdx];
+                } else {
+                    const srcIdx = i % totalFound;
+                    p = validPoints[srcIdx];
+                }
+
+                const jitterAmount = 0.08;
+                result[i * 3] = (p.x + (Math.random() - 0.5) * jitterAmount) * clusterScale;
+                result[i * 3 + 1] = (p.y + (Math.random() - 0.5) * jitterAmount) * clusterScale;
+                result[i * 3 + 2] = (p.z + (Math.random() - 0.5) * jitterAmount) * clusterScale;
+            }
+
+            return result;
+        }
+
+        // Procedural fallbacks for presets with sharp signature/crown artwork
+        function generateDefaultProceduralCoordinates(type, pointCount) {
+            const w = 400;
+            const h = 400;
+            samplerCanvas.width = w;
+            samplerCanvas.height = h;
+            samplerCtx.fillStyle = '#000000';
+            samplerCtx.fillRect(0, 0, w, h);
+            samplerCtx.fillStyle = '#ffffff';
+            samplerCtx.strokeStyle = '#ffffff';
+
+            if (type === 'BLACKPINK') {
+                samplerCtx.font = '900 52px sans-serif';
+                samplerCtx.textAlign = 'center';
+                samplerCtx.textBaseline = 'middle';
+                samplerCtx.fillText('BLACK', 200, 150);
+                samplerCtx.fillText('PINK', 200, 240);
+                samplerCtx.lineWidth = 10;
+                samplerCtx.strokeRect(50, 50, 300, 300);
+            } else if (type === 'CROWN') {
+                samplerCtx.beginPath();
+                samplerCtx.moveTo(60, 280);
+                samplerCtx.lineTo(50, 110);
+                samplerCtx.lineTo(135, 190);
+                samplerCtx.lineTo(200, 80);
+                samplerCtx.lineTo(265, 190);
+                samplerCtx.lineTo(350, 110);
+                samplerCtx.lineTo(340, 280);
+                samplerCtx.closePath();
+                samplerCtx.fill();
+                samplerCtx.fillStyle = '#000000';
+                samplerCtx.fillRect(80, 240, 240, 20);
+            } else if (type === 'BACKVIEW') {
+                samplerCtx.font = 'bold 30px sans-serif';
+                samplerCtx.textAlign = 'center';
+                samplerCtx.fillText('BLACKPINK', 200, 60);
+                
+                for (let i = 0; i < 4; i++) {
+                    const cx = 80 + i * 80;
+                    samplerCtx.beginPath();
+                    samplerCtx.arc(cx, 130, 22, 0, Math.PI * 2);
+                    samplerCtx.fill();
+                    samplerCtx.beginPath();
+                    samplerCtx.moveTo(cx - 30, 330);
+                    samplerCtx.lineTo(cx - 24, 160);
+                    samplerCtx.lineTo(cx + 24, 160);
+                    samplerCtx.lineTo(cx + 30, 330);
+                    samplerCtx.closePath();
+                    samplerCtx.fill();
+                }
+            } else if (type.endsWith('_SIGN')) {
+                const nameMap = {
+                    'JENNIE_SIGN': 'Jennie ♡',
+                    'LISA_SIGN': 'Lisa ★',
+                    'ROSE_SIGN': 'Rosé ✿',
+                    'JISOO_SIGN': 'Jisoo ✦'
+                };
+                const displayName = nameMap[type] || 'Sign';
+
+                samplerCtx.font = 'italic bold 56px cursive, sans-serif';
+                samplerCtx.textAlign = 'center';
+                samplerCtx.fillText(displayName, 200, 160);
+
+                samplerCtx.beginPath();
+                samplerCtx.lineWidth = 8;
+                samplerCtx.moveTo(50, 250);
+                samplerCtx.bezierCurveTo(120, 200, 280, 320, 350, 220);
+                samplerCtx.stroke();
+
+                samplerCtx.beginPath();
+                samplerCtx.arc(320, 260, 16, 0, Math.PI * 2);
+                samplerCtx.fill();
+            }
+
+            const img = new Image();
+            img.src = samplerCanvas.toDataURL();
+            return new Promise((resolve) => {
+                img.onload = () => {
+                    resolve(generateCoordinatesFromImage(img, pointCount));
+                };
+            });
+        }
+
+        // Image upload handler for each specific gesture
+        window.handleImageUpload = function(event, gestureId) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = new Image();
+                img.onload = function() {
+                    rawGestureSources[gestureId] = img;
+                    customGestureCoordinates[gestureId] = generateCoordinatesFromImage(img, PARTICLE_COUNT);
+                    
+                    const badge = document.getElementById(`badge-${gestureId}`);
+                    if (badge) {
+                        badge.innerText = 'Custom Upload';
+                        badge.className = 'text-[9px] text-emerald-300 bg-emerald-950 px-1.5 py-0.5 rounded border border-emerald-500/40';
+                    }
+
+                    if (activeGestureId === gestureId) {
+                        targetPositions = customGestureCoordinates[gestureId];
+                    }
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        };
+
+        // Reset custom photo for a gesture
+        window.resetGestureImage = async function(gestureId) {
+            const gestureObj = GESTURES.find(g => g.id === gestureId);
+            if (!gestureObj) return;
+
+            const key = gestureObj.defaultText || gestureObj.defaultType;
+            rawGestureSources[gestureId] = key;
+            customGestureCoordinates[gestureId] = await generateDefaultProceduralCoordinates(key, PARTICLE_COUNT);
+
+            const badge = document.getElementById(`badge-${gestureId}`);
+            if (badge) {
+                badge.innerText = 'Preset Pattern';
+                badge.className = 'text-[9px] text-gray-400 bg-gray-800 px-1.5 py-0.5 rounded';
+            }
+
+            if (activeGestureId === gestureId) {
+                targetPositions = customGestureCoordinates[gestureId];
+            }
+        };
+
+        // Preload default coordinates for all gestures
+        async function preloadAllDefaultCoordinates() {
+            for (const g of GESTURES) {
+                const key = g.defaultText || g.defaultType;
+                rawGestureSources[g.id] = key;
+                customGestureCoordinates[g.id] = await generateDefaultProceduralCoordinates(key, PARTICLE_COUNT);
+            }
+        }
+
+
+        // --- 4. Three.js Particle Engine Setup ---
+        let scene, camera, renderer;
+        let mainParticleSystem, mainParticleGeometry;
+        let currentPositions, targetPositions, randomPositions;
+
+        function initThreeJS() {
+            const threeCanvas = document.getElementById('three-canvas');
+
+            scene = new THREE.Scene();
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 32;
+
+            renderer = new THREE.WebGLRenderer({ canvas: threeCanvas, alpha: true, antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+            const particleTexture = createParticleTexture();
+
+            randomPositions = createRandomNebulaPoints(PARTICLE_COUNT);
+            currentPositions = new Float32Array(randomPositions);
+            targetPositions = new Float32Array(randomPositions);
+
+            mainParticleGeometry = new THREE.BufferGeometry();
+            mainParticleGeometry.setAttribute('position', new THREE.BufferAttribute(currentPositions, 3));
+
+            const particleMaterial = new THREE.PointsMaterial({
+                color: 0xffffff,
+                size: 0.8,
+                map: particleTexture,
+                transparent: true,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+                opacity: 0.95
+            });
+
+            mainParticleSystem = new THREE.Points(mainParticleGeometry, particleMaterial);
+            scene.add(mainParticleSystem);
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function createParticleTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+
+            const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+            gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+            gradient.addColorStop(0.35, 'rgba(244, 114, 182, 0.8)'); // Light Pink glow
+            gradient.addColorStop(0.75, 'rgba(236, 72, 153, 0.3)');
+            gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, 64, 64);
+
+            const texture = new THREE.Texture(canvas);
+            texture.needsUpdate = true;
+            return texture;
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+
+            skeletonCanvas.width = window.innerWidth;
+            skeletonCanvas.height = window.innerHeight;
+        }
+
+
+        // --- 5. MediaPipe Hands & Realtime Gesture Classifier ---
+        let hands, cameraUtils;
+
+        function initMediaPipe() {
+            skeletonCanvas.width = window.innerWidth;
+            skeletonCanvas.height = window.innerHeight;
+
+            hands = new Hands({
+                locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+            });
+
+            hands.setOptions({
+                maxNumHands: 2,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.6,
+                minTrackingConfidence: 0.6
+            });
+
+            hands.onResults(onHandResults);
+
+            cameraUtils = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({ image: videoElement });
+                },
+                width: 1280,
+                height: 720
+            });
+
+            cameraUtils.start().then(() => {
+                statusIndicator.className = "w-3 h-3 rounded-full bg-emerald-400 shadow-[0_0_10px_#34d399]";
+                statusText.innerText = "Gesture System Ready";
+            }).catch(err => {
+                console.error(err);
+                statusIndicator.className = "w-3 h-3 rounded-full bg-red-500";
+                statusText.innerText = "Camera access denied or unreadable";
+            });
+        }
+
+        // Main Hand landmark classifier
+        function onHandResults(results) {
+            skeletonCtx.save();
+            skeletonCtx.clearRect(0, 0, skeletonCanvas.width, skeletonCanvas.height);
+
+            let detectedGesture = null;
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                // Check for Two-Handed Heart Gesture
+                if (results.multiHandLandmarks.length === 2) {
+                    if (checkHeartGesture(results.multiHandLandmarks[0], results.multiHandLandmarks[1])) {
+                        detectedGesture = 'heart';
+                    }
+                }
+
+                // If not two-handed heart, evaluate primary single-hand gesture
+                if (!detectedGesture) {
+                    for (const landmarks of results.multiHandLandmarks) {
+                        if (showSkeleton) {
+                            drawConnectors(skeletonCtx, landmarks, HAND_CONNECTIONS, { color: '#ec4899', lineWidth: 3 });
+                            drawLandmarks(skeletonCtx, landmarks, { color: '#ffffff', lineWidth: 1, radius: 4 });
+                        }
+
+                        const singleGesture = classifySingleHand(landmarks);
+                        if (singleGesture) {
+                            detectedGesture = singleGesture;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            skeletonCtx.restore();
+            applyGestureState(detectedGesture);
+        }
+
+        // Single Hand Finger State Classification
+        function classifySingleHand(lm) {
+            const isIndexExtended = lm[8].y < lm[6].y;
+            const isMiddleExtended = lm[12].y < lm[10].y;
+            const isRingExtended = lm[16].y < lm[14].y;
+            const isPinkyExtended = lm[20].y < lm[18].y;
+
+            // Distance of thumb tip to index MCP joint
+            const thumbFolded = Math.hypot(lm[4].x - lm[9].x, lm[4].y - lm[9].y) < 0.18;
+            const thumbExtended = !thumbFolded;
+
+            const extendedFourFingers = [isIndexExtended, isMiddleExtended, isRingExtended, isPinkyExtended];
+            const extendedCount = extendedFourFingers.filter(Boolean).length;
+
+            // 1. Gesture 4 (Index, Middle, Ring, Pinky Extended, Thumb Folded)
+            if (isIndexExtended && isMiddleExtended && isRingExtended && isPinkyExtended && thumbFolded) {
+                return 'four';
+            }
+
+            // 2. Gesture Open Palm -> Blackpink Cover (All 4 fingers extended + Thumb Extended)
+            if (extendedCount === 4 && thumbExtended) {
+                return 'palm';
+            }
+
+            // 3. Fist (No fingers extended & thumb closed)
+            if (extendedCount === 0) {
+                return 'fist';
+            }
+
+            // 4. Gesture 1 (Only Index Finger Extended)
+            if (isIndexExtended && !isMiddleExtended && !isRingExtended && !isPinkyExtended) {
+                return 'one';
+            }
+
+            // 5. Gesture 2 (Index + Middle Fingers Extended)
+            if (isIndexExtended && isMiddleExtended && !isRingExtended && !isPinkyExtended) {
+                return 'two';
+            }
+
+            // 6. Gesture 3 (Index + Middle + Ring Fingers Extended)
+            if (isIndexExtended && isMiddleExtended && isRingExtended && !isPinkyExtended) {
+                return 'three';
+            }
+
+            // Single Hand Heart fallback
+            const distThumbIndex = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y);
+            if (distThumbIndex < 0.08 && !isRingExtended && !isPinkyExtended) {
+                return 'heart';
+            }
+
+            return null;
+        }
+
+        // Two-Handed Heart Gesture Classifier
+        function checkHeartGesture(hand1, hand2) {
+            const index1 = hand1[8], index2 = hand2[8];
+            const thumb1 = hand1[4], thumb2 = hand2[4];
+
+            const indexDist = Math.hypot(index1.x - index2.x, index1.y - index2.y);
+            const thumbDist = Math.hypot(thumb1.x - thumb2.x, thumb1.y - thumb2.y);
+
+            return (indexDist < 0.16 && thumbDist < 0.16);
+        }
+
+        // Apply Detected State to 3D Scene Target Positions
+        function applyGestureState(gestureId) {
+            if (gestureId === activeGestureId) return;
+
+            GESTURES.forEach(g => {
+                const card = document.getElementById(`gesture-card-${g.id}`);
+                if (card) card.classList.remove('active-gesture-card');
+            });
+
+            if (gestureId && customGestureCoordinates[gestureId]) {
+                activeGestureId = gestureId;
+                const gestureObj = GESTURES.find(g => g.id === gestureId);
+
+                targetPositions = customGestureCoordinates[gestureId];
+
+                const activeCard = document.getElementById(`gesture-card-${gestureId}`);
+                if (activeCard) activeCard.classList.add('active-gesture-card');
+
+                activePatternTitle.innerText = gestureObj ? gestureObj.title : 'Recognized Gesture';
+                activeBanner.classList.remove('opacity-0', 'scale-90');
+                activeBanner.classList.add('opacity-100', 'scale-100');
+            } else {
+                activeGestureId = null;
+                targetPositions = randomPositions;
+
+                activeBanner.classList.remove('opacity-100', 'scale-100');
+                activeBanner.classList.add('opacity-0', 'scale-90');
+            }
+        }
+
+
+        // --- 6. Smooth Animation Loop ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Morph particle positions smoothly towards target shape via Lerp
+            if (currentPositions && targetPositions) {
+                const positions = mainParticleGeometry.attributes.position.array;
+                const lerpSpeed = 0.08;
+
+                for (let i = 0; i < PARTICLE_COUNT * 3; i++) {
+                    positions[i] += (targetPositions[i] - positions[i]) * lerpSpeed;
+                }
+
+                mainParticleGeometry.attributes.position.needsUpdate = true;
+            }
+
+            // Formed particle shape stays stationary (no Y/X scene rotation)
+            mainParticleSystem.rotation.y = 0;
+            mainParticleSystem.rotation.x = 0;
+
+            renderer.render(scene, camera);
+        }
+
+
+        // --- 7. Event Listeners & Particle Controls ---
+        document.getElementById('particle-count-slider').addEventListener('input', async (e) => {
+            PARTICLE_COUNT = parseInt(e.target.value);
+            document.getElementById('particle-count-label').innerText = PARTICLE_COUNT;
+
+            for (const g of GESTURES) {
+                const source = rawGestureSources[g.id];
+                if (source instanceof HTMLImageElement) {
+                    customGestureCoordinates[g.id] = generateCoordinatesFromImage(source, PARTICLE_COUNT);
+                } else if (typeof source === 'string') {
+                    customGestureCoordinates[g.id] = await generateDefaultProceduralCoordinates(source, PARTICLE_COUNT);
+                }
+            }
+
+            randomPositions = createRandomNebulaPoints(PARTICLE_COUNT);
+            currentPositions = new Float32Array(randomPositions);
+            targetPositions = activeGestureId ? customGestureCoordinates[activeGestureId] : randomPositions;
+
+            mainParticleGeometry.setAttribute('position', new THREE.BufferAttribute(currentPositions, 3));
+        });
+
+        document.getElementById('cluster-density-slider').addEventListener('input', async (e) => {
+            clusterScale = parseFloat(e.target.value);
+            document.getElementById('cluster-density-label').innerText = `${clusterScale.toFixed(1)}x`;
+
+            for (const g of GESTURES) {
+                const source = rawGestureSources[g.id];
+                if (source instanceof HTMLImageElement) {
+                    customGestureCoordinates[g.id] = generateCoordinatesFromImage(source, PARTICLE_COUNT);
+                } else if (typeof source === 'string') {
+                    customGestureCoordinates[g.id] = await generateDefaultProceduralCoordinates(source, PARTICLE_COUNT);
+                }
+            }
+
+            if (activeGestureId) {
+                targetPositions = customGestureCoordinates[activeGestureId];
+            }
+        });
+
+        document.getElementById('toggle-skeleton').addEventListener('change', (e) => {
+            showSkeleton = e.target.checked;
+        });
+
+
+        // --- 8. Application Entry Point ---
+        window.onload = async function() {
+            initUI();
+            initThreeJS();
+            await preloadAllDefaultCoordinates();
+            initMediaPipe();
+            animate();
+        };
+    </script>
+</body>
+</html>
