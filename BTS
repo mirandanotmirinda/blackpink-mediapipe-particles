@@ -1,0 +1,1228 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MediaPipe Hand Gesture 3D Vinyl Player</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Three.js CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    
+    <!-- MediaPipe Hands & Camera Utils CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #050505;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+        }
+
+        #webcam-video {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            min-width: 100%;
+            min-height: 100%;
+            width: auto;
+            height: auto;
+            transform: translate(-50%, -50%) scaleX(-1);
+            object-fit: cover;
+            z-index: 1;
+            opacity: 0.65;
+            filter: brightness(0.85) contrast(1.1);
+            transition: filter 0.8s ease, opacity 0.8s ease;
+        }
+
+        #custom-bg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            background-color: #050505;
+            background-size: cover;
+            background-position: center;
+            transition: background 0.4s ease, opacity 0.8s ease, filter 0.8s ease;
+        }
+
+        /* Ambient Dim Overlay when playing */
+        #dim-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            background: rgba(0, 0, 0, 0.75);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.8s ease;
+        }
+
+        #three-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+            pointer-events: none;
+        }
+
+        #gesture-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 3;
+            pointer-events: none;
+            transform: scaleX(-1);
+        }
+
+        .glow-text {
+            text-shadow: 0 0 10px rgba(99, 102, 241, 0.8), 0 0 20px rgba(168, 85, 247, 0.5);
+        }
+        
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.82);
+            backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+        }
+
+        ::-webkit-scrollbar {
+            width: 4px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body class="relative text-white select-none">
+
+    <!-- Webcam Background Video -->
+    <video id="webcam-video" autoplay playsinline muted></video>
+    
+    <!-- Custom/Solid Background Container -->
+    <div id="custom-bg" class="hidden"></div>
+
+    <!-- Ambient Dimming Layer -->
+    <div id="dim-overlay"></div>
+
+    <!-- 3D Scene Canvas -->
+    <canvas id="three-canvas"></canvas>
+
+    <!-- Gesture Tracking Canvas -->
+    <canvas id="gesture-canvas"></canvas>
+
+    <!-- UI Overlay -->
+    <div class="absolute inset-0 z-10 flex flex-col justify-between p-5 pointer-events-none">
+        
+        <!-- Top Control Bar -->
+        <div class="flex justify-between items-start w-full gap-4">
+            <!-- Status Card -->
+            <div class="glass-panel p-3.5 rounded-2xl flex items-center gap-3 shadow-2xl pointer-events-auto max-w-sm">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center text-lg font-bold shadow-lg shadow-indigo-500/30">
+                    <i class="fa-solid fa-compact-disc animate-spin" style="animation-duration: 8s;"></i>
+                </div>
+                <div>
+                    <h1 class="text-sm font-bold tracking-wide glow-text">3D Gesture Turntable</h1>
+                    <p id="gesture-status" class="text-xs text-indigo-300 font-medium">Initializing Gesture Tracking...</p>
+                </div>
+            </div>
+
+            <!-- Top Right Bar -->
+            <div class="glass-panel p-2.5 rounded-2xl flex items-center gap-2 pointer-events-auto flex-wrap">
+                <!-- Background Select -->
+                <div class="flex items-center gap-2 border-r border-white/10 pr-2.5">
+                    <span class="text-xs text-slate-300 font-medium hidden sm:inline">BG:</span>
+                    <select id="bg-select" class="bg-slate-800/90 text-xs text-slate-200 border border-slate-700 rounded-lg px-2 py-1.5 focus:outline-none cursor-pointer">
+                        <option value="webcam">🎥 Live Webcam</option>
+                        <option value="black">⬛ Black</option>
+                        <option value="white">⬜ White</option>
+                        <option value="color">🎨 Custom Color</option>
+                        <option value="image">🖼️ Upload Image</option>
+                    </select>
+                    <input type="color" id="bg-color-picker" value="#0f172a" class="hidden w-7 h-7 rounded cursor-pointer border-0 bg-transparent">
+                    <input type="file" id="bg-image-upload" accept="image/*" class="hidden">
+                </div>
+
+                <!-- Customizer Modal Toggle -->
+                <button id="toggle-editor-btn" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-3 py-2 rounded-xl transition shadow-lg flex items-center gap-1.5">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i>
+                    <span>Customize Records & Audio</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Disc & Audio Customizer Panel -->
+        <div id="editor-panel" class="absolute top-20 right-5 z-20 glass-panel p-5 rounded-3xl w-80 pointer-events-auto hidden transition-all duration-300 shadow-2xl border-indigo-500/30 max-h-[80vh] overflow-y-auto">
+            <div class="flex justify-between items-center mb-4 pb-2 border-b border-white/10">
+                <h3 class="text-sm font-bold flex items-center gap-2 text-indigo-300">
+                    <i class="fa-solid fa-palette"></i>
+                    <span>Customize Selected Record</span>
+                </h3>
+                <button id="close-editor-btn" class="text-slate-400 hover:text-white p-1">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <div class="space-y-4 text-xs">
+                <!-- Select Vinyl Disc to Edit -->
+                <div>
+                    <label class="block text-slate-300 mb-1 font-medium">Select Record:</label>
+                    <select id="edit-disc-select" class="w-full bg-slate-800 text-slate-200 border border-slate-700 rounded-lg p-2 focus:outline-none">
+                        <!-- JS Dynamically populated -->
+                    </select>
+                </div>
+
+                <!-- Dedicated Audio Upload for Selected Record -->
+                <div class="bg-indigo-950/40 p-3 rounded-2xl border border-indigo-500/30">
+                    <label class="block text-indigo-300 mb-1.5 font-semibold flex items-center justify-between">
+                        <span><i class="fa-solid fa-file-audio mr-1"></i> Audio Track:</span>
+                        <span id="audio-file-status" class="text-[10px] text-slate-400 truncate max-w-[120px]">Default Synth</span>
+                    </label>
+                    <label class="block w-full bg-indigo-600 hover:bg-indigo-500 text-white text-center font-semibold py-2 rounded-xl cursor-pointer transition shadow">
+                        <i class="fa-solid fa-upload mr-1"></i> Upload Audio for Record
+                        <input type="file" id="upload-disc-audio" accept="audio/*" class="hidden">
+                    </label>
+                </div>
+
+                <!-- Text Customization -->
+                <div>
+                    <label class="block text-slate-300 mb-1 font-medium">Track Title:</label>
+                    <input type="text" id="edit-disc-title" class="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-white focus:border-indigo-500 focus:outline-none">
+                </div>
+                <div>
+                    <label class="block text-slate-300 mb-1 font-medium">Artist / Subtitle:</label>
+                    <input type="text" id="edit-disc-artist" class="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-white focus:border-indigo-500 focus:outline-none">
+                </div>
+
+                <!-- Color Customization -->
+                <div class="flex justify-between items-center bg-slate-800/50 p-2.5 rounded-xl border border-white/5">
+                    <span class="text-slate-300 font-medium">Vinyl Disc Color:</span>
+                    <input type="color" id="edit-disc-body-color" value="#111115" class="w-8 h-8 rounded border-0 bg-transparent cursor-pointer">
+                </div>
+
+                <div class="flex justify-between items-center bg-slate-800/50 p-2.5 rounded-xl border border-white/5">
+                    <span class="text-slate-300 font-medium">Center Label Color:</span>
+                    <input type="color" id="edit-disc-label-color" value="#ffffff" class="w-8 h-8 rounded border-0 bg-transparent cursor-pointer">
+                </div>
+
+                <!-- Custom Texture Uploads -->
+                <div>
+                    <label class="block text-slate-300 mb-1.5 font-medium">Center Label Image:</label>
+                    <label class="block w-full border border-dashed border-slate-600 hover:border-indigo-400 bg-slate-800/40 rounded-xl p-2.5 text-center cursor-pointer transition">
+                        <i class="fa-solid fa-image text-indigo-400 mr-1"></i>
+                        <span id="center-img-label-text" class="text-slate-300">Choose Image...</span>
+                        <input type="file" id="upload-center-image" accept="image/*" class="hidden">
+                    </label>
+                </div>
+
+                <div>
+                    <label class="block text-slate-300 mb-1.5 font-medium">Outer Disc Texture:</label>
+                    <label class="block w-full border border-dashed border-slate-600 hover:border-indigo-400 bg-slate-800/40 rounded-xl p-2.5 text-center cursor-pointer transition">
+                        <i class="fa-solid fa-photo-film text-purple-400 mr-1"></i>
+                        <span id="outer-img-label-text" class="text-slate-300">Choose Texture...</span>
+                        <input type="file" id="upload-outer-image" accept="image/*" class="hidden">
+                    </label>
+                </div>
+
+                <button id="apply-disc-edit" class="w-full bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 font-semibold py-2.5 rounded-xl transition shadow-lg text-white mt-2">
+                    Apply Changes
+                </button>
+            </div>
+        </div>
+
+        <!-- Selected Record Info Panel -->
+        <div id="disc-info-panel" class="self-center glass-panel p-5 rounded-3xl text-center max-w-sm w-full transition-all duration-500 transform translate-y-10 opacity-0 pointer-events-auto shadow-2xl border-indigo-500/30">
+            <span id="disc-badge" class="px-3 py-1 bg-indigo-500/20 text-indigo-400 text-xs font-semibold rounded-full border border-indigo-500/30">Record #1</span>
+            <h2 id="disc-title" class="text-lg font-bold my-1.5 truncate">Classic Symphony</h2>
+            <p id="disc-artist" class="text-xs text-slate-400 mb-3">Built-in Synth Track</p>
+
+            <div class="w-full bg-slate-800/80 rounded-full h-1.5 mb-3 overflow-hidden border border-white/5">
+                <div id="audio-progress" class="bg-gradient-to-r from-indigo-500 to-pink-500 h-full w-0 transition-all duration-200"></div>
+            </div>
+
+            <div class="flex justify-around items-center text-[11px] text-slate-300">
+                <div class="flex items-center gap-1.5">
+                    <i class="fa-solid fa-rotate-right text-indigo-400"></i>
+                    <span>Index Circle: Drop Needle & Play</span>
+                </div>
+                <div class="flex items-center gap-1.5">
+                    <i class="fa-solid fa-hand-back-fist text-rose-400"></i>
+                    <span>Fist: Reset & Hide</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Gesture Instruction Guide -->
+        <div class="glass-panel px-5 py-3 rounded-2xl w-full max-w-3xl mx-auto flex justify-between items-center text-xs text-slate-300 gap-2">
+            <div class="flex items-center gap-2">
+                <span class="w-6 h-6 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center font-bold text-[11px]">1</span>
+                <div>
+                    <div class="font-semibold text-white">Open Palm Pan</div>
+                    <div class="text-[10px] text-slate-400">Rotate record ring</div>
+                </div>
+            </div>
+            <div class="w-px h-7 bg-white/10"></div>
+            <div class="flex items-center gap-2">
+                <span class="w-6 h-6 rounded-lg bg-purple-500/20 text-purple-400 flex items-center justify-center font-bold text-[11px]">2</span>
+                <div>
+                    <div class="font-semibold text-white">Index Tap / Pinch</div>
+                    <div class="text-[10px] text-slate-400">Load selected record</div>
+                </div>
+            </div>
+            <div class="w-px h-7 bg-white/10"></div>
+            <div class="flex items-center gap-2">
+                <span class="w-6 h-6 rounded-lg bg-pink-500/20 text-pink-400 flex items-center justify-center font-bold text-[11px]">3</span>
+                <div>
+                    <div class="font-semibold text-white">Index Circle</div>
+                    <div class="text-[10px] text-slate-400">Drop needle & start playing</div>
+                </div>
+            </div>
+            <div class="w-px h-7 bg-white/10"></div>
+            <div class="flex items-center gap-2">
+                <span class="w-6 h-6 rounded-lg bg-rose-500/20 text-rose-400 flex items-center justify-center font-bold text-[11px]">4</span>
+                <div>
+                    <div class="font-semibold text-white">Make Fist</div>
+                    <div class="text-[10px] text-slate-400">Reset & return to ring</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+<!-- Logic Script -->
+<script>
+    /**
+     * Global Configuration & Variables
+     */
+    const TOTAL_DISCS = 7;
+    const RING_RADIUS = 4.2; 
+    const HIGH_Y = 1.8;
+    let scene, camera, renderer;
+    let discGroup, turntableGroup, tonearmGroup, coverGroup;
+    let whiteSpotlight, fillLight;
+    const discs = [];
+    let selectedDiscIndex = -1;
+    let isPlaying = false;
+
+    // Interaction State
+    let targetRingRotation = 0;
+    let currentRingRotation = 0;
+    let lastHandX = null;
+    let lastPinchTime = 0;
+    let indexFingerHistory = [];
+
+    // Turntable & Tonearm Animation Parameters
+    let turntableTargetY = -6.0;
+    let turntableCurrentY = -6.0;
+    let tonearmTargetAngle = 0;
+    let tonearmCurrentAngle = 0;
+
+    // Audio Manager with individual track storage per record
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const discDataList = Array.from({ length: TOTAL_DISCS }, (_, i) => ({
+        id: i,
+        title: `Vinyl Track #${i + 1}`,
+        artist: `Artist Spectrum ${i + 1}`,
+        bodyColor: ['#ef4444', '#d946ef', '#111115', '#06b6d4', '#f59e0b', '#8b5cf6', '#10b981'][i],
+        labelColor: ['#ffffff', '#fef08a', '#ef4444', '#ffffff', '#1e293b', '#ec4899', '#f0fdf4'][i],
+        centerImg: null,
+        outerImg: null,
+        audioUrl: null,
+        audioElement: null
+    }));
+
+    /**
+     * 1. Three.js Scene Setup & Black Turntable Creation
+     */
+    function initThreeJS() {
+        const canvas = document.getElementById('three-canvas');
+        scene = new THREE.Scene();
+
+        camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 2.8, 9);
+        camera.lookAt(0, 0.5, 0);
+
+        renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+
+        // Ambient & Scene Lights
+        fillLight = new THREE.AmbientLight(0xffffff, 1.4);
+        scene.add(fillLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+        dirLight.position.set(6, 12, 8);
+        scene.add(dirLight);
+
+        // White Fluorescent Spotlight targeting the spinning disc on the platter
+        whiteSpotlight = new THREE.SpotLight(0xffffff, 0); // Intensity dynamically changes when playing
+        whiteSpotlight.position.set(-0.6, 6.5, 2.0);
+        whiteSpotlight.target.position.set(-0.6, 0.2, 1.2);
+        whiteSpotlight.angle = Math.PI / 4.5;
+        whiteSpotlight.penumbra = 0.45;
+        whiteSpotlight.decay = 1.2;
+        scene.add(whiteSpotlight);
+        scene.add(whiteSpotlight.target);
+
+        // Build Black Turntable
+        createHighEndTurntable();
+
+        // Discs Container
+        discGroup = new THREE.Group();
+        scene.add(discGroup);
+
+        // Generate 7 Custom Vinyl Discs
+        for (let i = 0; i < TOTAL_DISCS; i++) {
+            const discMesh = createCustomVinylMesh(i);
+            discMesh.userData = { id: i };
+            discs.push(discMesh);
+            discGroup.add(discMesh);
+        }
+
+        updateDiscsTransform(true);
+        window.addEventListener('resize', onWindowResize);
+    }
+
+    /**
+     * Build Black High-End Turntable (Black Needle & Black Platter)
+     */
+    function createHighEndTurntable() {
+        turntableGroup = new THREE.Group();
+        turntableGroup.position.set(0, turntableCurrentY, 1.2);
+        turntableGroup.rotation.x = Math.PI * 0.1;
+
+        // 1. Sleek Base Body
+        const baseGeo = new THREE.BoxGeometry(4.6, 0.38, 3.8);
+        const baseMat = new THREE.MeshStandardMaterial({
+            color: 0x111827,
+            roughness: 0.15,
+            metalness: 0.3
+        });
+        const base = new THREE.Mesh(baseGeo, baseMat);
+        base.position.y = -0.19;
+        turntableGroup.add(base);
+
+        // Control Knob & LED Status Light
+        const knobGeo = new THREE.CylinderGeometry(0.14, 0.14, 0.16, 32);
+        const knobMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.2, metalness: 0.8 });
+        const knob = new THREE.Mesh(knobGeo, knobMat);
+        knob.position.set(1.9, 0.08, 1.5);
+        turntableGroup.add(knob);
+
+        const ledGeo = new THREE.SphereGeometry(0.04, 16, 16);
+        const ledMat = new THREE.MeshBasicMaterial({ color: 0x22c55e });
+        const led = new THREE.Mesh(ledGeo, ledMat);
+        led.position.set(1.6, 0.05, 1.5);
+        turntableGroup.add(led);
+
+        // 2. Pure Black Platter (黑色放唱片的唱片盤)
+        const platterGeo = new THREE.CylinderGeometry(1.4, 1.4, 0.08, 64);
+        const platterMat = new THREE.MeshStandardMaterial({
+            color: 0x050505, // Deep Black
+            roughness: 0.4,
+            metalness: 0.1
+        });
+        const platter = new THREE.Mesh(platterGeo, platterMat);
+        platter.position.set(-0.6, 0.04, 0);
+        turntableGroup.add(platter);
+
+        // Fluorescent Accent Ring Under Platter
+        const glowRingGeo = new THREE.CylinderGeometry(1.43, 1.43, 0.03, 64);
+        const glowRingMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        const glowRing = new THREE.Mesh(glowRingGeo, glowRingMat);
+        glowRing.position.set(-0.6, 0.01, 0);
+        turntableGroup.add(glowRing);
+
+        // Center Spindle Pin
+        const spindleGeo = new THREE.CylinderGeometry(0.035, 0.035, 0.28, 16);
+        const spindleMat = new THREE.MeshStandardMaterial({ metalness: 0.95, roughness: 0.05, color: 0xd1d5db });
+        const spindle = new THREE.Mesh(spindleGeo, spindleMat);
+        spindle.position.set(-0.6, 0.14, 0);
+        turntableGroup.add(spindle);
+
+        // 3. Transparent Acrylic Dust Cover
+        coverGroup = new THREE.Group();
+        coverGroup.position.set(0, 0, -1.8);
+        coverGroup.rotation.x = -Math.PI * 0.38;
+
+        const coverGeo = new THREE.BoxGeometry(4.6, 0.06, 3.6);
+        const coverMat = new THREE.MeshPhysicalMaterial({
+            color: 0xffffff,
+            transparent: true,
+            opacity: 0.22,
+            roughness: 0.05,
+            transmission: 0.95,
+            ior: 1.5
+        });
+        const cover = new THREE.Mesh(coverGeo, coverMat);
+        cover.position.set(0, 0, 1.8);
+        coverGroup.add(cover);
+        turntableGroup.add(coverGroup);
+
+        // 4. Black Tonearm & Needle Assembly (黑色落針/唱針組)
+        tonearmGroup = new THREE.Group();
+        tonearmGroup.position.set(1.35, 0.08, -0.6);
+
+        const basePivotGeo = new THREE.CylinderGeometry(0.2, 0.22, 0.22, 32);
+        const blackMetalMat = new THREE.MeshStandardMaterial({ color: 0x0a0a0c, metalness: 0.85, roughness: 0.2 });
+        const pivot = new THREE.Mesh(basePivotGeo, blackMetalMat);
+        tonearmGroup.add(pivot);
+
+        // Counterweight & Arm Bar (Black)
+        const counterWeightGeo = new THREE.CylinderGeometry(0.1, 0.1, 0.2, 32);
+        const counterWeight = new THREE.Mesh(counterWeightGeo, blackMetalMat);
+        counterWeight.rotation.x = Math.PI / 2;
+        counterWeight.position.set(0.15, 0.2, -0.2);
+        tonearmGroup.add(counterWeight);
+
+        const armGeo = new THREE.CylinderGeometry(0.025, 0.025, 1.75, 16);
+        const arm = new THREE.Mesh(armGeo, blackMetalMat);
+        arm.rotation.z = Math.PI / 2;
+        arm.rotation.y = -Math.PI / 5;
+        arm.position.set(-0.7, 0.18, 0.35);
+        tonearmGroup.add(arm);
+
+        // Cartridge & Black Needle Head (黑色唱針)
+        const cartridgeGeo = new THREE.BoxGeometry(0.08, 0.09, 0.22);
+        const cartridgeMat = new THREE.MeshStandardMaterial({ color: 0x020202, metalness: 0.9, roughness: 0.1 });
+        const cartridge = new THREE.Mesh(cartridgeGeo, cartridgeMat);
+        cartridge.position.set(-1.45, 0.12, 0.72);
+        cartridge.rotation.y = Math.PI * 0.22;
+
+        // Needle Stylus Pin
+        const needlePinGeo = new THREE.CylinderGeometry(0.008, 0.002, 0.08, 16);
+        const needlePinMat = new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.95, roughness: 0.05 });
+        const needlePin = new THREE.Mesh(needlePinGeo, needlePinMat);
+        needlePin.position.set(0, -0.05, 0.08);
+        cartridge.add(needlePin);
+
+        tonearmGroup.add(cartridge);
+        turntableGroup.add(tonearmGroup);
+        scene.add(turntableGroup);
+    }
+
+    /**
+     * Canvas Generated Vinyl Disc Texture Mesh
+     */
+    function createCustomVinylMesh(index) {
+        const group = new THREE.Group();
+        const discGeo = new THREE.CylinderGeometry(1.25, 1.25, 0.03, 64);
+        
+        const discMat = new THREE.MeshStandardMaterial({
+            roughness: 0.25,
+            metalness: 0.45,
+        });
+
+        const discMesh = new THREE.Mesh(discGeo, discMat);
+        group.add(discMesh);
+
+        // Highlighting Outer Ring
+        const ringGeo = new THREE.RingGeometry(1.28, 1.33, 32);
+        const ringMat = new THREE.MeshBasicMaterial({
+            color: 0x6366f1,
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: 0.2
+        });
+        const glowRing = new THREE.Mesh(ringGeo, ringMat);
+        glowRing.rotation.x = Math.PI / 2;
+        glowRing.name = "glowRing";
+        group.add(glowRing);
+
+        updateDiscTexture(index, discMesh);
+        return group;
+    }
+
+    /**
+     * 2D Canvas Disc Texture Generator
+     */
+    function updateDiscTexture(index, discMesh) {
+        const data = discDataList[index];
+        const canvas = document.createElement('canvas');
+        canvas.width = 1024;
+        canvas.height = 1024;
+        const ctx = canvas.getContext('2d');
+
+        // 1. Outer Disc Background or Pattern Image
+        if (data.outerImg) {
+            ctx.drawImage(data.outerImg, 0, 0, 1024, 1024);
+        } else {
+            ctx.fillStyle = data.bodyColor;
+            ctx.fillRect(0, 0, 1024, 1024);
+
+            // Vinyl Grooves
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.35)';
+            ctx.lineWidth = 2.5;
+            for (let r = 180; r < 480; r += 7) {
+                ctx.beginPath();
+                ctx.arc(512, 512, r, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+        }
+
+        // 2. Center Label
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(512, 512, 160, 0, Math.PI * 2);
+        ctx.clip();
+
+        if (data.centerImg) {
+            ctx.drawImage(data.centerImg, 352, 352, 320, 320);
+        } else {
+            ctx.fillStyle = data.labelColor;
+            ctx.fillRect(352, 352, 320, 320);
+            
+            ctx.fillStyle = '#0f172a';
+            ctx.font = 'bold 36px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(data.title, 512, 470);
+            ctx.font = '22px sans-serif';
+            ctx.fillText(data.artist, 512, 560);
+        }
+        ctx.restore();
+
+        // 3. Center Hole
+        ctx.fillStyle = '#000000';
+        ctx.beginPath();
+        ctx.arc(512, 512, 22, 0, Math.PI * 2);
+        ctx.fill();
+
+        const texture = new THREE.CanvasTexture(canvas);
+        discMesh.material.map = texture;
+        discMesh.material.needsUpdate = true;
+    }
+
+    function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+
+        const gCanvas = document.getElementById('gesture-canvas');
+        gCanvas.width = window.innerWidth;
+        gCanvas.height = window.innerHeight;
+    }
+
+    /**
+     * 2. MediaPipe Hands Tracking
+     */
+    function initMediaPipe() {
+        const videoElement = document.getElementById('webcam-video');
+        const gestureCanvas = document.getElementById('gesture-canvas');
+        const ctx = gestureCanvas.getContext('2d');
+
+        gestureCanvas.width = window.innerWidth;
+        gestureCanvas.height = window.innerHeight;
+
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.65,
+            minTrackingConfidence: 0.65
+        });
+
+        hands.onResults((results) => {
+            ctx.clearRect(0, 0, gestureCanvas.width, gestureCanvas.height);
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                drawHandOverlay(ctx, landmarks);
+                processHandGestures(landmarks);
+            } else {
+                document.getElementById('gesture-status').innerText = 'Waiting for hand gestures...';
+                lastHandX = null;
+            }
+        });
+
+        const cameraUtils = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({ image: videoElement });
+            },
+            width: 1280,
+            height: 720
+        });
+        cameraUtils.start();
+    }
+
+    /**
+     * Hand Gesture Detection Engine
+     */
+    function processHandGestures(landmarks) {
+        const statusEl = document.getElementById('gesture-status');
+        const indexTip = landmarks[8];
+        const indexMcp = landmarks[5];
+        const thumbTip = landmarks[4];
+
+        // 1. Fist Gesture -> Reset & Hide
+        const isFist = isFingerBent(landmarks, 8, 5) &&
+                       isFingerBent(landmarks, 12, 9) &&
+                       isFingerBent(landmarks, 16, 13) &&
+                       isFingerBent(landmarks, 20, 17);
+
+        if (isFist) {
+            statusEl.innerText = '✊ Fist: Hiding turntable & resetting';
+            resetSelection();
+            return;
+        }
+
+        const pinchDist = dist(indexTip, thumbTip);
+        const now = Date.now();
+
+        const isIndexOnly = !isFingerBent(landmarks, 8, 5) &&
+                            isFingerBent(landmarks, 12, 9) &&
+                            isFingerBent(landmarks, 16, 13) &&
+                            isFingerBent(landmarks, 20, 17);
+
+        const isOpenPalm = !isFingerBent(landmarks, 8, 5) &&
+                           !isFingerBent(landmarks, 12, 9) &&
+                           !isFingerBent(landmarks, 16, 13) &&
+                           !isFingerBent(landmarks, 20, 17);
+
+        // Index Tap/Pinch to select disc
+        if ((pinchDist < 0.08 || isIndexOnly) && selectedDiscIndex === -1 && (now - lastPinchTime > 1000)) {
+            lastPinchTime = now;
+            checkDiscSelectionByClick();
+            return;
+        }
+
+        // Open Palm Pan -> Rotate Discs
+        if (isOpenPalm && selectedDiscIndex === -1) {
+            statusEl.innerText = '🖐️ Open Palm Pan: Rotate vinyl ring';
+            const currentHandX = indexMcp.x;
+            if (lastHandX !== null) {
+                targetRingRotation += (currentHandX - lastHandX) * 5.5;
+            }
+            lastHandX = currentHandX;
+            return;
+        } else if (isOpenPalm && selectedDiscIndex !== -1) {
+            statusEl.innerText = '🖐️ Open Palm Pan: Browse background disclist';
+            const currentHandX = indexMcp.x;
+            if (lastHandX !== null) {
+                targetRingRotation += (currentHandX - lastHandX) * 3.5;
+            }
+            lastHandX = currentHandX;
+            return;
+        } else {
+            lastHandX = null;
+        }
+
+        // Index Circle Gesture -> Drop needle and start playing
+        if (isIndexOnly && selectedDiscIndex !== -1) {
+            detectCircleGesture(indexTip);
+            statusEl.innerText = isPlaying ? '🎵 Playing record with white spotlight focused!' : '☝️ Index Circle: Drop needle & start playing';
+            return;
+        }
+    }
+
+    function isFingerBent(landmarks, tipIdx, mcpIdx) {
+        return dist(landmarks[tipIdx], landmarks[0]) < dist(landmarks[mcpIdx], landmarks[0]);
+    }
+
+    function dist(p1, p2) {
+        return Math.hypot(p1.x - p2.x, p1.y - p2.y, (p1.z || 0) - (p2.z || 0));
+    }
+
+    /**
+     * Circular Trajectory Recognition
+     */
+    function detectCircleGesture(indexTip) {
+        const now = Date.now();
+        indexFingerHistory.push({ x: indexTip.x, y: indexTip.y, time: now });
+        indexFingerHistory = indexFingerHistory.filter(p => now - p.time < 1000);
+
+        if (indexFingerHistory.length > 12) {
+            let totalAngleChange = 0;
+            for (let i = 2; i < indexFingerHistory.length; i++) {
+                const p1 = indexFingerHistory[i - 2];
+                const p2 = indexFingerHistory[i - 1];
+                const p3 = indexFingerHistory[i];
+
+                const v1 = { x: p2.x - p1.x, y: p2.y - p1.y };
+                const v2 = { x: p3.x - p2.x, y: p3.y - p2.y };
+
+                const angle1 = Math.atan2(v1.y, v1.x);
+                const angle2 = Math.atan2(v2.y, v2.x);
+
+                let diff = angle2 - angle1;
+                while (diff < -Math.PI) diff += Math.PI * 2;
+                while (diff > Math.PI) diff -= Math.PI * 2;
+
+                totalAngleChange += diff;
+            }
+
+            if (Math.abs(totalAngleChange) > Math.PI * 2.2) {
+                if (!isPlaying && selectedDiscIndex !== -1) {
+                    startPlayingDisc(selectedDiscIndex);
+                }
+                indexFingerHistory = [];
+            }
+        }
+    }
+
+    function checkDiscSelectionByClick() {
+        let closestDisc = -1;
+        let maxZ = -Infinity;
+
+        discs.forEach((disc, idx) => {
+            const worldPos = new THREE.Vector3();
+            disc.getWorldPosition(worldPos);
+
+            if (worldPos.z > maxZ) {
+                maxZ = worldPos.z;
+                closestDisc = idx;
+            }
+        });
+
+        if (closestDisc !== -1) {
+            selectDisc(closestDisc);
+        }
+    }
+
+    /**
+     * Select Disc
+     */
+    function selectDisc(index) {
+        selectedDiscIndex = index;
+        isPlaying = false;
+
+        // Raise Turntable
+        turntableTargetY = -1.75;
+        tonearmTargetAngle = 0;
+
+        const infoPanel = document.getElementById('disc-info-panel');
+        const data = discDataList[index];
+
+        document.getElementById('disc-badge').innerText = `Record #${index + 1}`;
+        document.getElementById('disc-title').innerText = data.title;
+        document.getElementById('disc-artist').innerText = data.artist;
+
+        infoPanel.classList.remove('translate-y-10', 'opacity-0');
+        infoPanel.classList.add('translate-y-0', 'opacity-100');
+
+        updateAudioStatusInEditor(index);
+    }
+
+    /**
+     * Reset Selection
+     */
+    function resetSelection() {
+        selectedDiscIndex = -1;
+        isPlaying = false;
+
+        // Hide Turntable & Dim Overlay
+        turntableTargetY = -6.0;
+        tonearmTargetAngle = 0;
+
+        const infoPanel = document.getElementById('disc-info-panel');
+        infoPanel.classList.add('translate-y-10', 'opacity-0');
+        infoPanel.classList.remove('translate-y-0', 'opacity-100');
+
+        document.getElementById('dim-overlay').style.opacity = '0';
+
+        stopAudio();
+    }
+
+    /**
+     * Drop Needle, Focus White Spotlight & Play
+     */
+    function startPlayingDisc(index) {
+        isPlaying = true;
+        // Drop Black Needle onto Record
+        tonearmTargetAngle = Math.PI * 0.18;
+
+        // Dim background for focused lighting effect
+        document.getElementById('dim-overlay').style.opacity = '1';
+
+        const data = discDataList[index];
+        if (data.audioElement) {
+            data.audioElement.currentTime = 0;
+            data.audioElement.play();
+        } else {
+            playSynthSound(index);
+        }
+    }
+
+    let currentOscillator = null;
+
+    function playSynthSound(index) {
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        if (currentOscillator) try { currentOscillator.stop(); } catch(e){}
+
+        const freqs = [261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88];
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(freqs[index % freqs.length], audioCtx.currentTime);
+
+        gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 4);
+
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        osc.start();
+        currentOscillator = osc;
+    }
+
+    function stopAudio() {
+        if (currentOscillator) {
+            try { currentOscillator.stop(); } catch(e){}
+            currentOscillator = null;
+        }
+        discDataList.forEach(d => {
+            if (d.audioElement) {
+                d.audioElement.pause();
+            }
+        });
+    }
+
+    /**
+     * Draw Hand Overlay Landmarks
+     */
+    function drawHandOverlay(ctx, landmarks) {
+        const w = ctx.canvas.width;
+        const h = ctx.canvas.height;
+        const connections = [
+            [0,1],[1,2],[2,3],[3,4],
+            [0,5],[5,6],[6,7],[7,8],
+            [5,9],[9,10],[10,11],[11,12],
+            [9,13],[13,14],[14,15],[15,16],
+            [13,17],[17,18],[18,19],[19,20],[0,17]
+        ];
+
+        ctx.strokeStyle = 'rgba(99, 102, 241, 0.6)';
+        ctx.lineWidth = 3;
+
+        connections.forEach(([i, j]) => {
+            ctx.beginPath();
+            ctx.moveTo(landmarks[i].x * w, landmarks[i].y * h);
+            ctx.lineTo(landmarks[j].x * w, landmarks[j].y * h);
+            ctx.stroke();
+        });
+
+        landmarks.forEach((pt, index) => {
+            ctx.beginPath();
+            ctx.arc(pt.x * w, pt.y * h, index === 8 ? 8 : 4, 0, Math.PI * 2);
+            ctx.fillStyle = index === 8 ? '#ec4899' : '#38bdf8';
+            ctx.fill();
+        });
+    }
+
+    /**
+     * Real-time 3D Disc Position & Lighting Engine
+     */
+    function updateDiscsTransform(immediate = false) {
+        const time = Date.now() * 0.002;
+        currentRingRotation += (targetRingRotation - currentRingRotation) * 0.1;
+
+        // Dynamic Spotlight and Ambient Dimming Control
+        if (isPlaying) {
+            whiteSpotlight.intensity += (12.0 - whiteSpotlight.intensity) * 0.08;
+            fillLight.intensity += (0.4 - fillLight.intensity) * 0.08;
+        } else {
+            whiteSpotlight.intensity += (0 - whiteSpotlight.intensity) * 0.08;
+            fillLight.intensity += (1.4 - fillLight.intensity) * 0.08;
+            document.getElementById('dim-overlay').style.opacity = '0';
+        }
+
+        if (selectedDiscIndex === -1) {
+            // Mode 1: Ring formation in the air
+            discs.forEach((disc, i) => {
+                const angle = (i / TOTAL_DISCS) * Math.PI * 2 + currentRingRotation;
+                const targetX = Math.sin(angle) * RING_RADIUS;
+                const targetZ = Math.cos(angle) * RING_RADIUS;
+                const targetY = HIGH_Y + Math.sin(time + i) * 0.22;
+
+                if (immediate) {
+                    disc.position.set(targetX, targetY, targetZ);
+                    disc.rotation.set(0, angle, 0);
+                } else {
+                    disc.position.x += (targetX - disc.position.x) * 0.1;
+                    disc.position.z += (targetZ - disc.position.z) * 0.1;
+                    disc.position.y += (targetY - disc.position.y) * 0.1;
+
+                    disc.rotation.x += (Math.PI / 2 - disc.rotation.x) * 0.1;
+                    disc.rotation.y += (angle - disc.rotation.y) * 0.1;
+                    disc.rotation.z += (0 - disc.rotation.z) * 0.1;
+                }
+
+                const ring = disc.getObjectByName("glowRing");
+                if (ring) ring.material.opacity = 0.2;
+            });
+        } else {
+            // Mode 2: Disc loaded onto black platter
+            const targetDisc = discs[selectedDiscIndex];
+            const platterPos = new THREE.Vector3(-0.6, turntableCurrentY + 0.2, 1.2);
+
+            targetDisc.position.x += (platterPos.x - targetDisc.position.x) * 0.12;
+            targetDisc.position.y += (platterPos.y - targetDisc.position.y) * 0.12;
+            targetDisc.position.z += (platterPos.z - targetDisc.position.z) * 0.12;
+
+            targetDisc.rotation.x += (Math.PI * 0.1 - targetDisc.rotation.x) * 0.12;
+            targetDisc.rotation.z += (0 - targetDisc.rotation.z) * 0.12;
+
+            if (isPlaying) {
+                targetDisc.rotation.y += 0.06; // Continuous spinning
+            } else {
+                targetDisc.rotation.y += (0 - targetDisc.rotation.y) * 0.1;
+            }
+
+            const activeRing = targetDisc.getObjectByName("glowRing");
+            if (activeRing) activeRing.material.opacity = 0.8;
+
+            // Line up unselected discs in background
+            let unselectedCount = 0;
+            const totalUnselected = TOTAL_DISCS - 1;
+            const startX = -3.8;
+            const stepX = 7.6 / Math.max(totalUnselected - 1, 1);
+
+            discs.forEach((disc, i) => {
+                if (i === selectedDiscIndex) return;
+
+                const lineX = startX + unselectedCount * stepX + currentRingRotation * 1.5;
+                const lineY = 2.2 + Math.sin(time + i) * 0.15;
+                const lineZ = -2.0;
+
+                disc.position.x += (lineX - disc.position.x) * 0.08;
+                disc.position.y += (lineY - disc.position.y) * 0.08;
+                disc.position.z += (lineZ - disc.position.z) * 0.08;
+
+                disc.rotation.x += (Math.PI / 2.2 - disc.rotation.x) * 0.08;
+                disc.rotation.y += (0 - disc.rotation.y) * 0.08;
+                disc.rotation.z += (0 - disc.rotation.z) * 0.08;
+
+                const ring = disc.getObjectByName("glowRing");
+                if (ring) ring.material.opacity = 0.1;
+
+                unselectedCount++;
+            });
+        }
+    }
+
+    /**
+     * 5. Editor Panel Controls (Per-Disc Audio Uploading Enabled)
+     */
+    function initEditorControls() {
+        const toggleBtn = document.getElementById('toggle-editor-btn');
+        const closeBtn = document.getElementById('close-editor-btn');
+        const editorPanel = document.getElementById('editor-panel');
+        const discSelect = document.getElementById('edit-disc-select');
+
+        // Populate Disc Dropdown
+        for (let i = 0; i < TOTAL_DISCS; i++) {
+            const opt = document.createElement('option');
+            opt.value = i;
+            opt.innerText = `Record #${i + 1}`;
+            discSelect.appendChild(opt);
+        }
+
+        toggleBtn.addEventListener('click', () => {
+            editorPanel.classList.toggle('hidden');
+            const targetIdx = selectedDiscIndex !== -1 ? selectedDiscIndex : parseInt(discSelect.value);
+            discSelect.value = targetIdx;
+            loadDiscDataToForm(targetIdx);
+        });
+
+        closeBtn.addEventListener('click', () => editorPanel.classList.add('hidden'));
+
+        discSelect.addEventListener('change', (e) => {
+            loadDiscDataToForm(parseInt(e.target.value));
+        });
+
+        // Load Record Data into Form
+        function loadDiscDataToForm(idx) {
+            const d = discDataList[idx];
+            document.getElementById('edit-disc-title').value = d.title;
+            document.getElementById('edit-disc-artist').value = d.artist;
+            document.getElementById('edit-disc-body-color').value = d.bodyColor;
+            document.getElementById('edit-disc-label-color').value = d.labelColor;
+            updateAudioStatusInEditor(idx);
+        }
+
+        // Upload Audio for ANY specific record
+        document.getElementById('upload-disc-audio').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const idx = parseInt(discSelect.value);
+            const url = URL.createObjectURL(file);
+
+            discDataList[idx].audioUrl = url;
+            discDataList[idx].audioElement = new Audio(url);
+            
+            // Auto update title if unedited
+            if (discDataList[idx].title.startsWith('Vinyl Track #')) {
+                discDataList[idx].title = file.name.replace(/\.[^/.]+$/, "");
+                document.getElementById('edit-disc-title').value = discDataList[idx].title;
+            }
+            discDataList[idx].artist = "Custom Audio Track";
+
+            updateAudioStatusInEditor(idx);
+            updateDiscTexture(idx, discs[idx].children[0]);
+
+            if (selectedDiscIndex === idx) selectDisc(idx);
+        });
+
+        // Center Image Texture Upload
+        document.getElementById('upload-center-image').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const idx = parseInt(discSelect.value);
+            const img = new Image();
+            img.src = URL.createObjectURL(file);
+            img.onload = () => {
+                discDataList[idx].centerImg = img;
+                document.getElementById('center-img-label-text').innerText = file.name;
+            };
+        });
+
+        // Outer Image Texture Upload
+        document.getElementById('upload-outer-image').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const idx = parseInt(discSelect.value);
+            const img = new Image();
+            img.src = URL.createObjectURL(file);
+            img.onload = () => {
+                discDataList[idx].outerImg = img;
+                document.getElementById('outer-img-label-text').innerText = file.name;
+            };
+        });
+
+        // Apply Customizations
+        document.getElementById('apply-disc-edit').addEventListener('click', () => {
+            const idx = parseInt(discSelect.value);
+            const d = discDataList[idx];
+
+            d.title = document.getElementById('edit-disc-title').value;
+            d.artist = document.getElementById('edit-disc-artist').value;
+            d.bodyColor = document.getElementById('edit-disc-body-color').value;
+            d.labelColor = document.getElementById('edit-disc-label-color').value;
+
+            const discMesh = discs[idx].children[0];
+            updateDiscTexture(idx, discMesh);
+
+            if (selectedDiscIndex === idx) {
+                document.getElementById('disc-title').innerText = d.title;
+                document.getElementById('disc-artist').innerText = d.artist;
+            }
+
+            editorPanel.classList.add('hidden');
+        });
+    }
+
+    function updateAudioStatusInEditor(idx) {
+        const d = discDataList[idx];
+        const statusEl = document.getElementById('audio-file-status');
+        if (statusEl) {
+            statusEl.innerText = d.audioElement ? "Custom Track Loaded" : "Default Synth";
+        }
+    }
+
+    /**
+     * 6. Background Controls
+     */
+    function initBackgroundControls() {
+        const bgSelect = document.getElementById('bg-select');
+        const colorPicker = document.getElementById('bg-color-picker');
+        const imageUpload = document.getElementById('bg-image-upload');
+        const webcamVideo = document.getElementById('webcam-video');
+        const customBg = document.getElementById('custom-bg');
+
+        bgSelect.addEventListener('change', (e) => {
+            const mode = e.target.value;
+            colorPicker.classList.add('hidden');
+
+            if (mode === 'webcam') {
+                webcamVideo.classList.remove('hidden');
+                customBg.classList.add('hidden');
+            } else if (mode === 'black') {
+                webcamVideo.classList.add('hidden');
+                customBg.classList.remove('hidden');
+                customBg.style.backgroundImage = 'none';
+                customBg.style.backgroundColor = '#000000';
+            } else if (mode === 'white') {
+                webcamVideo.classList.add('hidden');
+                customBg.classList.remove('hidden');
+                customBg.style.backgroundImage = 'none';
+                customBg.style.backgroundColor = '#ffffff';
+            } else if (mode === 'color') {
+                colorPicker.classList.remove('hidden');
+                colorPicker.click();
+            } else if (mode === 'image') {
+                imageUpload.click();
+            }
+        });
+
+        colorPicker.addEventListener('input', (e) => {
+            webcamVideo.classList.add('hidden');
+            customBg.classList.remove('hidden');
+            customBg.style.backgroundImage = 'none';
+            customBg.style.backgroundColor = e.target.value;
+        });
+
+        imageUpload.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                const url = URL.createObjectURL(file);
+                webcamVideo.classList.add('hidden');
+                customBg.classList.remove('hidden');
+                customBg.style.backgroundImage = `url(${url})`;
+            }
+        });
+    }
+
+    /**
+     * Animation Loop
+     */
+    window.onload = () => {
+        initThreeJS();
+        initMediaPipe();
+        initEditorControls();
+        initBackgroundControls();
+        animate();
+    };
+
+    function animate() {
+        requestAnimationFrame(animate);
+
+        // Turntable Y Position Smooth Interpolation
+        turntableCurrentY += (turntableTargetY - turntableCurrentY) * 0.08;
+        if (turntableGroup) {
+            turntableGroup.position.y = turntableCurrentY;
+        }
+
+        // Black Tonearm Rotation Angle Smooth Interpolation
+        tonearmCurrentAngle += (tonearmTargetAngle - tonearmCurrentAngle) * 0.08;
+        if (tonearmGroup) {
+            tonearmGroup.rotation.y = tonearmCurrentAngle;
+        }
+
+        updateDiscsTransform();
+        renderer.render(scene, camera);
+    }
+</script>
+</body>
+</html>
